@@ -1,0 +1,20 @@
+# ResearchMind — Phase 1 Requirements
+
+# Core LangChain stack
+langchain>=0.3.0
+langchain-community>=0.3.0
+langchain-openai>=0.2.0
+langchain-chroma>=0.1.0
+
+# Vector store
+chromadb>=0.5.0
+
+# PDF loading
+pypdf>=4.0.0
+
+# Environment variables
+python-dotenv>=1.0.0
+
+# Phase 4 (add later)
+# streamlit>=1.35.0
+# fastapi>=0.111.0

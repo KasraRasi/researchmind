@@ -1,0 +1,67 @@
+Introduction to Large Language Models
+======================================
+
+Large Language Models (LLMs) are a type of artificial intelligence trained
+on massive amounts of text data. They learn to predict the next word in a
+sequence, which — at scale — results in systems capable of reasoning,
+summarizing, translating, and generating human-like text.
+
+How LLMs Work
+-------------
+LLMs are based on the Transformer architecture, introduced by Vaswani et al.
+in the 2017 paper "Attention Is All You Need". The key innovation is the
+self-attention mechanism, which allows the model to weigh the relevance of
+every word in a sentence relative to every other word.
+
+During training, the model processes billions of text examples and adjusts
+billions of internal parameters (weights) to minimize prediction error.
+This process is called gradient descent.
+
+Retrieval-Augmented Generation (RAG)
+-------------------------------------
+RAG is a technique that combines LLMs with external knowledge retrieval.
+Instead of relying solely on what the model learned during training, RAG
+systems retrieve relevant documents at query time and include them in the
+prompt context.
+
+The typical RAG pipeline:
+1. Index: documents are split into chunks and converted to embeddings
+2. Retrieve: at query time, the most relevant chunks are fetched
+3. Generate: the LLM uses the retrieved chunks to answer the question
+
+RAG significantly reduces hallucinations (made-up facts) because the model
+is answering from provided context rather than memory alone.
+
+LangGraph and Agent Orchestration
+-----------------------------------
+LangGraph is a library built on top of LangChain that allows developers to
+build stateful, multi-step AI workflows as graphs. Nodes represent
+processing steps (like "retrieve documents" or "generate answer"), and
+edges define the flow between them, including conditional branching.
+
+This is particularly powerful for agentic applications where the AI must
+decide which tool to use, self-correct when retrieval fails, or route
+queries to different specialized agents.
+
+Vector Databases
+-----------------
+A vector database stores high-dimensional vectors alongside their source
+documents. The key operation is approximate nearest neighbor (ANN) search:
+given a query vector, find the stored vectors closest to it in meaning.
+
+Popular options include:
+- ChromaDB: open source, runs locally, easy to start with
+- Pinecone: managed cloud service, scales to billions of vectors
+- Weaviate: open source with a rich query API
+- FAISS: Facebook's library, extremely fast, used in research
+
+Embeddings: The Bridge Between Text and Math
+---------------------------------------------
+An embedding model converts text into a dense vector of floating-point
+numbers. OpenAI's text-embedding-3-small produces 1536-dimensional vectors.
+The cosine similarity between two vectors measures how semantically similar
+they are — values near 1.0 mean very similar meaning, near 0 means unrelated.
+
+Key insight: "LLMs are trained on text" and "Language models learn from data"
+will have very similar embedding vectors, even though they share few words.
+This is what makes semantic search superior to keyword matching.
