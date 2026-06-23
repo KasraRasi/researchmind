@@ -2,6 +2,8 @@
 
 A multi-agent RAG system built with LangGraph. Upload your documents, ask questions, get cited answers — with automatic web search fallback when your docs don't have the answer.
 
+🚀 **[Live Demo](https://researchmindd.streamlit.app/)** | 💻 **[GitHub](https://github.com/KasraRasi/researchmind)**
+
 ![Chat UI showing answer from documents](screenShots/demo_documents.png)
 ![Chat UI showing web search fallback](screenShots/demo_web.png)
 ![Chat UI showing Under the hood](screenShots/terminal_1.png)
