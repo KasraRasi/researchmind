@@ -2,26 +2,16 @@
 ResearchMind — Phase 4: Streamlit Chat UI
 ==========================================
 
-WHAT THIS FILE DOES:
-  Builds a chat interface on top of the graph we built in Phases 1-3.
-  Users can:
-    - Upload PDF or text documents
-    - Ask questions in a chat interface
-    - See answers with cited sources
-    - Know whether the answer came from documents or web search
-
 HOW TO RUN:
   streamlit run src/app.py
 
-CORE CONCEPT — Why Streamlit?
-  Streamlit turns a Python script into a web app with almost no extra
-  code. Every time the user interacts (types a message, uploads a file),
-  the script reruns from top to bottom. st.session_state persists data
-  between reruns — like a global variable that survives page refreshes.
+Users can either:
+  - Set API keys in .env file (for local use)
+  - Enter API keys directly in the sidebar (for deployed/demo use)
 """
 
 import os
-import shutil
+import sys
 from pathlib import Path
 
 import streamlit as st
@@ -30,11 +20,11 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Project paths
-DOCS_DIR = Path(__file__).parent.parent / "data" / "sample_docs"
+DOCS_DIR  = Path(__file__).parent.parent / "data" / "sample_docs"
 FAISS_DIR = Path(__file__).parent.parent / "data" / "faiss_db"
 
 # ---------------------------------------------------------------------------
-# PAGE CONFIG — must be first Streamlit call
+# PAGE CONFIG
 # ---------------------------------------------------------------------------
 
 st.set_page_config(
@@ -46,8 +36,6 @@ st.set_page_config(
 # ---------------------------------------------------------------------------
 # SESSION STATE
 # ---------------------------------------------------------------------------
-# NOTE: st.session_state persists values between reruns.
-# Without it, every message would reset the chat history.
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -55,20 +43,29 @@ if "messages" not in st.session_state:
 if "vector_store_ready" not in st.session_state:
     st.session_state.vector_store_ready = FAISS_DIR.exists()
 
+if "keys_set" not in st.session_state:
+    # Check if keys already exist in environment (.env file)
+    st.session_state.keys_set = bool(os.getenv("OPENAI_API_KEY"))
+
 # ---------------------------------------------------------------------------
 # HELPERS
 # ---------------------------------------------------------------------------
 
+def set_api_keys(openai_key: str, tavily_key: str):
+    """Set API keys in the environment for this session."""
+    os.environ["OPENAI_API_KEY"]  = openai_key
+    os.environ["TAVILY_API_KEY"]  = tavily_key
+    st.session_state.keys_set     = True
+
+
 def load_graph():
-    """Import and build the graph — done here so imports stay clean."""
     from graph import build_graph
     return build_graph()
 
 
 def run_ingestion_pipeline(docs_dir: Path):
-    """Run the ingestion pipeline and return success bool."""
     from ingest import load_documents, split_documents, build_vector_store
-    docs = load_documents(docs_dir)
+    docs   = load_documents(docs_dir)
     if not docs:
         return False
     chunks = split_documents(docs)
@@ -77,23 +74,17 @@ def run_ingestion_pipeline(docs_dir: Path):
 
 
 def format_sources(sources: list, source_type: str) -> str:
-    """Format sources list into clean readable text."""
     if not sources:
         return ""
-
     if source_type == "web":
-        # Filter out generic "web" placeholders, keep real URLs
         real_urls = [s for s in sources if s.startswith("http")]
-        if real_urls:
-            return "\n".join(f"- {url}" for url in real_urls)
-        return "- Web search results"
+        return "\n".join(f"- {url}" for url in real_urls) if real_urls else "- Web search results"
     else:
-        unique = list(set(sources))
-        return "\n".join(f"- {s}" for s in unique)
+        return "\n".join(f"- {s}" for s in list(set(sources)))
 
 
 # ---------------------------------------------------------------------------
-# SIDEBAR — document upload + ingestion
+# SIDEBAR
 # ---------------------------------------------------------------------------
 
 with st.sidebar:
@@ -102,78 +93,126 @@ with st.sidebar:
 
     st.divider()
 
-    st.subheader("Documents")
+    # --- API Keys section ---
+    st.subheader("🔑 API Keys")
 
-    uploaded_files = st.file_uploader(
-        "Upload PDFs or text files",
-        type=["pdf", "txt", "md"],
-        accept_multiple_files=True,
-    )
+    if not st.session_state.keys_set:
+        st.caption("Enter your API keys to use the app. They stay in your browser session only and are never stored.")
 
-    if uploaded_files:
-        if st.button("Index documents", type="primary", use_container_width=True):
-            # Save uploaded files to docs directory
-            DOCS_DIR.mkdir(parents=True, exist_ok=True)
+        openai_key = st.text_input(
+            "OpenAI API Key",
+            type="password",
+            placeholder="sk-...",
+            help="Get yours at platform.openai.com",
+        )
 
-            with st.spinner("Saving files..."):
-                for file in uploaded_files:
-                    dest = DOCS_DIR / file.name
-                    with open(dest, "wb") as f:
-                        f.write(file.getbuffer())
+        tavily_key = st.text_input(
+            "Tavily API Key",
+            type="password",
+            placeholder="tvly-...",
+            help="Free key at tavily.com — needed for web search fallback",
+        )
 
-            # Run ingestion
-            with st.spinner("Building vector store... (this may take a moment)"):
-                success = run_ingestion_pipeline(DOCS_DIR)
-
-            if success:
-                st.session_state.vector_store_ready = True
-                st.success(f"✅ Indexed {len(uploaded_files)} file(s)")
+        if st.button("Save keys", type="primary", use_container_width=True):
+            if openai_key and tavily_key:
+                set_api_keys(openai_key, tavily_key)
+                st.success("✅ Keys saved for this session")
+                st.rerun()
+            elif openai_key and not tavily_key:
+                # Allow without Tavily — web search just won't work
+                os.environ["OPENAI_API_KEY"] = openai_key
+                st.session_state.keys_set    = True
+                st.warning("Tavily key missing — web search fallback disabled")
+                st.rerun()
             else:
-                st.error("Failed to index documents. Check your API key.")
+                st.error("OpenAI key is required")
 
-    st.divider()
+        st.divider()
+        st.caption("💡 Get a free OpenAI key at [platform.openai.com](https://platform.openai.com)")
+        st.caption("💡 Get a free Tavily key at [tavily.com](https://tavily.com)")
 
-    # Status indicator
-    if st.session_state.vector_store_ready:
-        st.success("Vector store ready")
     else:
-        st.warning("No documents indexed yet")
-
-    # Show indexed files
-    if DOCS_DIR.exists():
-        files = list(DOCS_DIR.glob("**/*.txt")) + \
-                list(DOCS_DIR.glob("**/*.pdf")) + \
-                list(DOCS_DIR.glob("**/*.md"))
-        if files:
-            st.caption("Indexed files:")
-            for f in files:
-                st.caption(f"  • {f.name}")
+        st.success("✅ API keys active")
+        if st.button("Change keys", use_container_width=True):
+            st.session_state.keys_set = False
+            os.environ.pop("OPENAI_API_KEY", None)
+            os.environ.pop("TAVILY_API_KEY", None)
+            st.rerun()
 
     st.divider()
 
-    # Clear chat button
-    if st.button("Clear chat", use_container_width=True):
-        st.session_state.messages = []
-        st.rerun()
+    # --- Documents section ---
+    if st.session_state.keys_set:
+        st.subheader("📄 Documents")
+
+        uploaded_files = st.file_uploader(
+            "Upload PDFs or text files",
+            type=["pdf", "txt", "md"],
+            accept_multiple_files=True,
+        )
+
+        if uploaded_files:
+            if st.button("Index documents", type="primary", use_container_width=True):
+                DOCS_DIR.mkdir(parents=True, exist_ok=True)
+
+                with st.spinner("Saving files..."):
+                    for file in uploaded_files:
+                        dest = DOCS_DIR / file.name
+                        with open(dest, "wb") as f:
+                            f.write(file.getbuffer())
+
+                with st.spinner("Building vector store..."):
+                    success = run_ingestion_pipeline(DOCS_DIR)
+
+                if success:
+                    st.session_state.vector_store_ready = True
+                    st.success(f"✅ Indexed {len(uploaded_files)} file(s)")
+                else:
+                    st.error("Failed to index. Check your OpenAI key.")
+
+        st.divider()
+
+        if st.session_state.vector_store_ready:
+            st.success("Vector store ready")
+        else:
+            st.warning("No documents indexed yet")
+
+        if DOCS_DIR.exists():
+            files = (list(DOCS_DIR.glob("**/*.txt")) +
+                     list(DOCS_DIR.glob("**/*.pdf")) +
+                     list(DOCS_DIR.glob("**/*.md")))
+            if files:
+                st.caption("Indexed files:")
+                for f in files:
+                    st.caption(f"  • {f.name}")
+
+        st.divider()
+
+        if st.button("Clear chat", use_container_width=True):
+            st.session_state.messages = []
+            st.rerun()
 
     st.divider()
     st.caption("Built with LangGraph + RAG")
-    st.caption("Phase 4 — Portfolio project")
+    st.caption("[GitHub](https://github.com/KasraRasi/researchmind)")
 
 
 # ---------------------------------------------------------------------------
 # MAIN CHAT UI
 # ---------------------------------------------------------------------------
 
-st.title("ResearchMind")
+st.title("ResearchMind 🔍")
 st.caption("Ask questions about your documents. Falls back to web search when needed.")
 
-# Show existing chat messages
+# Show gate if keys not set
+if not st.session_state.keys_set:
+    st.info("👈 Enter your API keys in the sidebar to get started.")
+    st.stop()
+
+# Show chat history
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
-
-        # Show sources if present
         if message.get("sources") and message.get("source_type"):
             source_text = format_sources(message["sources"], message["source_type"])
             if source_text:
@@ -184,20 +223,13 @@ for message in st.session_state.messages:
 # Chat input
 if prompt := st.chat_input("Ask a question about your documents..."):
 
-    # Check API key
-    if not os.getenv("OPENAI_API_KEY"):
-        st.error("OPENAI_API_KEY not set. Add it to your .env file.")
-        st.stop()
-
-    # Show user message
     st.chat_message("user").markdown(prompt)
     st.session_state.messages.append({"role": "user", "content": prompt})
 
-    # Run the graph
     with st.chat_message("assistant"):
         with st.spinner("Thinking..."):
             try:
-                graph = load_graph()
+                graph  = load_graph()
                 result = graph.invoke({
                     "question":       prompt,
                     "chunks":         [],
@@ -212,25 +244,20 @@ if prompt := st.chat_input("Ask a question about your documents..."):
                 sources     = result.get("sources", [])
                 source_type = result.get("source_type", "documents")
 
-                # Clean up the answer — remove the "search results do not contain"
-                # disclaimer if the LLM still answered correctly
+                # Clean up disclaimer if LLM answered anyway
                 if "search results do not contain" in answer.lower() and len(answer) > 80:
-                    # LLM answered anyway after the disclaimer — keep just the answer
                     parts = answer.split("However,")
                     if len(parts) > 1:
                         answer = "However," + parts[1].strip()
 
-                # Display answer
                 st.markdown(answer)
 
-                # Display sources
                 source_text = format_sources(sources, source_type)
                 if source_text:
                     badge = "📄 Documents" if source_type == "documents" else "🌐 Web search"
                     with st.expander(f"Sources — {badge}"):
                         st.markdown(source_text)
 
-                # Save to history
                 st.session_state.messages.append({
                     "role":        "assistant",
                     "content":     answer,
