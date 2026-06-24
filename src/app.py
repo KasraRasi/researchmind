@@ -1,17 +1,18 @@
 """
-ResearchMind — Phase 4: Streamlit Chat UI
+ResearchMind — Production Upgrade: App v2
 ==========================================
 
-HOW TO RUN:
-  streamlit run src/app.py
+CHANGES FROM v1:
+  1. Graph is cached with @st.cache_resource — compiled once per session,
+     not rebuilt on every message. Eliminates the biggest performance bottleneck.
 
-Users can either:
-  - Set API keys in .env file (for local use)
-  - Enter API keys directly in the sidebar (for deployed/demo use)
+  2. reset_retriever() is called after ingestion — forces the singleton
+     retriever to reload from the updated FAISS index when new docs are added.
+
+  3. State key updated — added rewritten_query to match GraphState v2.
 """
 
 import os
-import sys
 from pathlib import Path
 
 import streamlit as st
@@ -19,7 +20,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Project paths
 DOCS_DIR  = Path(__file__).parent.parent / "data" / "sample_docs"
 FAISS_DIR = Path(__file__).parent.parent / "data" / "faiss_db"
 
@@ -44,32 +44,43 @@ if "vector_store_ready" not in st.session_state:
     st.session_state.vector_store_ready = FAISS_DIR.exists()
 
 if "keys_set" not in st.session_state:
-    # Check if keys already exist in environment (.env file)
     st.session_state.keys_set = bool(os.getenv("OPENAI_API_KEY"))
+
+# ---------------------------------------------------------------------------
+# CACHED GRAPH
+# Design decision: @st.cache_resource caches the compiled graph across all
+# reruns. Streamlit reruns the script on every interaction — without caching,
+# build_graph() would recompile the LangGraph on every message sent.
+# ---------------------------------------------------------------------------
+
+@st.cache_resource
+def load_graph():
+    from graph import build_graph
+    return build_graph()
+
 
 # ---------------------------------------------------------------------------
 # HELPERS
 # ---------------------------------------------------------------------------
 
 def set_api_keys(openai_key: str, tavily_key: str):
-    """Set API keys in the environment for this session."""
-    os.environ["OPENAI_API_KEY"]  = openai_key
-    os.environ["TAVILY_API_KEY"]  = tavily_key
-    st.session_state.keys_set     = True
+    os.environ["OPENAI_API_KEY"] = openai_key
+    if tavily_key:
+        os.environ["TAVILY_API_KEY"] = tavily_key
+    st.session_state.keys_set = True
 
 
-def load_graph():
-    from graph import build_graph
-    return build_graph()
-
-
-def run_ingestion_pipeline(docs_dir: Path):
+def run_ingestion_pipeline(docs_dir: Path) -> bool:
     from ingest import load_documents, split_documents, build_vector_store
-    docs   = load_documents(docs_dir)
+    docs = load_documents(docs_dir)
     if not docs:
         return False
     chunks = split_documents(docs)
     store  = build_vector_store(chunks)
+    if store:
+        # Reset the singleton retriever so it reloads the updated FAISS index
+        from graph import reset_retriever
+        reset_retriever()
     return store is not None
 
 
@@ -79,8 +90,7 @@ def format_sources(sources: list, source_type: str) -> str:
     if source_type == "web":
         real_urls = [s for s in sources if s.startswith("http")]
         return "\n".join(f"- {url}" for url in real_urls) if real_urls else "- Web search results"
-    else:
-        return "\n".join(f"- {s}" for s in list(set(sources)))
+    return "\n".join(f"- {s}" for s in list(set(sources)))
 
 
 # ---------------------------------------------------------------------------
@@ -90,39 +100,25 @@ def format_sources(sources: list, source_type: str) -> str:
 with st.sidebar:
     st.title("🔍 ResearchMind")
     st.caption("Multi-agent RAG powered by LangGraph")
-
     st.divider()
 
-    # --- API Keys section ---
     st.subheader("🔑 API Keys")
 
     if not st.session_state.keys_set:
-        st.caption("Enter your API keys to use the app. They stay in your browser session only and are never stored.")
+        st.caption("Keys stay in your browser session only — never stored.")
 
-        openai_key = st.text_input(
-            "OpenAI API Key",
-            type="password",
-            placeholder="sk-...",
-            help="Get yours at platform.openai.com",
-        )
-
-        tavily_key = st.text_input(
-            "Tavily API Key",
-            type="password",
-            placeholder="tvly-...",
-            help="Free key at tavily.com — needed for web search fallback",
-        )
+        openai_key = st.text_input("OpenAI API Key", type="password", placeholder="sk-...",
+                                   help="Get yours at platform.openai.com")
+        tavily_key = st.text_input("Tavily API Key", type="password", placeholder="tvly-...",
+                                   help="Free key at tavily.com — needed for web search fallback")
 
         if st.button("Save keys", type="primary", use_container_width=True):
-            if openai_key and tavily_key:
+            if openai_key:
                 set_api_keys(openai_key, tavily_key)
-                st.success("✅ Keys saved for this session")
-                st.rerun()
-            elif openai_key and not tavily_key:
-                # Allow without Tavily — web search just won't work
-                os.environ["OPENAI_API_KEY"] = openai_key
-                st.session_state.keys_set    = True
-                st.warning("Tavily key missing — web search fallback disabled")
+                if not tavily_key:
+                    st.warning("Tavily key missing — web search fallback disabled")
+                else:
+                    st.success("✅ Keys saved for this session")
                 st.rerun()
             else:
                 st.error("OpenAI key is required")
@@ -137,11 +133,11 @@ with st.sidebar:
             st.session_state.keys_set = False
             os.environ.pop("OPENAI_API_KEY", None)
             os.environ.pop("TAVILY_API_KEY", None)
+            st.cache_resource.clear()
             st.rerun()
 
     st.divider()
 
-    # --- Documents section ---
     if st.session_state.keys_set:
         st.subheader("📄 Documents")
 
@@ -154,11 +150,9 @@ with st.sidebar:
         if uploaded_files:
             if st.button("Index documents", type="primary", use_container_width=True):
                 DOCS_DIR.mkdir(parents=True, exist_ok=True)
-
                 with st.spinner("Saving files..."):
                     for file in uploaded_files:
-                        dest = DOCS_DIR / file.name
-                        with open(dest, "wb") as f:
+                        with open(DOCS_DIR / file.name, "wb") as f:
                             f.write(file.getbuffer())
 
                 with st.spinner("Building vector store..."):
@@ -204,12 +198,10 @@ with st.sidebar:
 st.title("ResearchMind 🔍")
 st.caption("Ask questions about your documents. Falls back to web search when needed.")
 
-# Show gate if keys not set
 if not st.session_state.keys_set:
     st.info("👈 Enter your API keys in the sidebar to get started.")
     st.stop()
 
-# Show chat history
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
@@ -220,7 +212,6 @@ for message in st.session_state.messages:
                 with st.expander(f"Sources — {badge}"):
                     st.markdown(source_text)
 
-# Chat input
 if prompt := st.chat_input("Ask a question about your documents..."):
 
     st.chat_message("user").markdown(prompt)
@@ -231,20 +222,20 @@ if prompt := st.chat_input("Ask a question about your documents..."):
             try:
                 graph  = load_graph()
                 result = graph.invoke({
-                    "question":       prompt,
-                    "chunks":         [],
-                    "grade":          "",
-                    "search_results": [],
-                    "source_type":    "documents",
-                    "answer":         "",
-                    "sources":        [],
+                    "question":        prompt,
+                    "rewritten_query": "",
+                    "chunks":          [],
+                    "grade":           "",
+                    "search_results":  [],
+                    "source_type":     "documents",
+                    "answer":          "",
+                    "sources":         [],
                 })
 
                 answer      = result.get("answer", "I couldn't generate an answer.")
                 sources     = result.get("sources", [])
                 source_type = result.get("source_type", "documents")
 
-                # Clean up disclaimer if LLM answered anyway
                 if "search results do not contain" in answer.lower() and len(answer) > 80:
                     parts = answer.split("However,")
                     if len(parts) > 1:
@@ -269,6 +260,5 @@ if prompt := st.chat_input("Ask a question about your documents..."):
                 error_msg = f"Error: {str(e)}"
                 st.error(error_msg)
                 st.session_state.messages.append({
-                    "role":    "assistant",
-                    "content": error_msg,
+                    "role": "assistant", "content": error_msg
                 })
